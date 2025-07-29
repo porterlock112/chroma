@@ -3,6 +3,10 @@ name = "chroma-index"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+load_hnsw_from_memory = []
+
 [lib]
 path = "src/lib.rs"
 
