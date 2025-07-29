@@ -43,6 +43,58 @@ pub struct AdmissionControlledS3Storage {
 }
 
 #[derive(Debug, Clone)]
+<<<<<<< HEAD
+=======
+struct AdmissionControlledS3StorageMetrics {
+    pub nac_dedup_count: opentelemetry::metrics::Counter<u64>,
+    pub nac_lock_wait_duration_us: opentelemetry::metrics::Histogram<u64>,
+    pub outstanding_read_requests: Arc<AtomicUsize>,
+    pub read_requests_waiting_for_token: Arc<AtomicUsize>,
+    pub hostname_attribute: [KeyValue; 1],
+    pub nac_outstanding_read_requests: opentelemetry::metrics::Histogram<u64>,
+    pub nac_read_requests_waiting_for_token: opentelemetry::metrics::Histogram<u64>,
+    pub nac_priority_increase_sent: opentelemetry::metrics::Counter<u64>,
+}
+
+impl Default for AdmissionControlledS3StorageMetrics {
+    fn default() -> Self {
+        let meter = global::meter("chroma.storage.admission_control");
+        Self {
+            outstanding_read_requests: Arc::new(AtomicUsize::new(0)),
+            read_requests_waiting_for_token: Arc::new(AtomicUsize::new(0)),
+            hostname_attribute: [KeyValue::new(
+                "hostname",
+                std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_string()),
+            )],
+            nac_dedup_count: meter
+                .u64_counter("nac_dedup_count")
+                .with_description("Number of deduplicated requests")
+                .build(),
+            nac_lock_wait_duration_us: meter
+                .u64_histogram("nac_lock_wait_duration_us")
+                .with_description("Duration spent holding the lock in microseconds")
+                .with_unit("us")
+                .build(),
+            nac_outstanding_read_requests: meter
+                .u64_histogram("nac_outstanding_requests")
+                .with_description("Number of outstanding requests in the admission control system")
+                .build(),
+            nac_read_requests_waiting_for_token: meter
+                .u64_histogram("nac_read_requests_waiting_for_token")
+                .with_description(
+                    "Number of requests in the admission control system waiting for a token",
+                )
+                .build(),
+            nac_priority_increase_sent: meter
+                .u64_counter("nac_priority_increase_sent")
+                .with_description("Number of times increase of priority was sent")
+                .build(),
+        }
+    }
+}
+
+////// Inflight Request Management //////
+>>>>>>> e3227a39a ([ENH] Move fetch to its own task for cancellation (#5158))
 struct InflightRequest {
     priority: Arc<AtomicUsize>,
     notify_channel: Option<tokio::sync::mpsc::Sender<()>>,
@@ -60,7 +112,16 @@ struct InflightRequest {
 
 impl InflightRequest {
     // Not thread safe.
+<<<<<<< HEAD
     async fn update_priority(&self, priority: StorageRequestPriority) {
+=======
+    async fn maybe_update_priority(
+        &self,
+        priority: StorageRequestPriority,
+        update_priority_counter: Counter<u64>,
+        hostname: &[KeyValue],
+    ) {
+>>>>>>> e3227a39a ([ENH] Move fetch to its own task for cancellation (#5158))
         // It is ok to not do Compare And Swap here since the caller obtains a mutex before
         // performing this operation so at any point there will only be one writer
         // for this AtomicUsize.
@@ -270,24 +331,104 @@ impl AdmissionControlledS3Storage {
             .map(|(bytes, _e_tag)| bytes)
     }
 
+<<<<<<< HEAD
+=======
+    pub async fn fetch<FetchReturn, FetchFn, FetchFut>(
+        &self,
+        key: &str,
+        options: GetOptions,
+        fetch_fn: FetchFn,
+    ) -> Result<(FetchReturn, Option<ETag>), StorageError>
+    where
+        FetchFn: FnOnce(Result<Arc<Vec<u8>>, StorageError>) -> FetchFut + Send + 'static,
+        FetchFut: Future<Output = Result<FetchReturn, StorageError>> + Send + 'static,
+        FetchReturn: Clone + Any + Sync + Send,
+    {
+        self.get_with_e_tag_internal(key, options, false, fetch_fn)
+            .await
+    }
+
+>>>>>>> e3227a39a ([ENH] Move fetch to its own task for cancellation (#5158))
     pub async fn get_with_e_tag(
         &self,
         key: &str,
         options: GetOptions,
     ) -> Result<(Arc<Vec<u8>>, Option<ETag>), StorageError> {
+<<<<<<< HEAD
+=======
+        self.get_with_e_tag_internal::<_, _, _>(key, options, false, |r| async move { r })
+            .await
+    }
+
+    async fn execute_fetch<FetchReturn, FetchFn, FetchFut>(
+        fetch_fn: FetchFn,
+        input: Result<(Arc<Vec<u8>>, Option<ETag>), StorageError>,
+    ) -> Result<(FetchReturn, Option<ETag>), StorageError>
+    where
+        FetchFn: FnOnce(Result<Arc<Vec<u8>>, StorageError>) -> FetchFut,
+        FetchFut: Future<Output = Result<FetchReturn, StorageError>> + Send + 'static,
+        FetchReturn: Clone + Any + Sync + Send,
+    {
+        match input {
+            Ok((bytes, e_tag)) => {
+                let ret = fetch_fn(Ok(bytes)).await;
+                ret.map(|r| (r, e_tag))
+            }
+            Err(e) => {
+                let ret = fetch_fn(Err(e)).await;
+                ret.map(|r| (r, None))
+            }
+        }
+    }
+
+    async fn get_with_e_tag_internal<FetchReturn, FetchFn, FetchFut>(
+        &self,
+        key: &str,
+        options: GetOptions,
+        // TODO: remove is_parallel and move it into GetOptions, refactor all callers
+        // to use the new options instead of special methods.
+        is_parallel: bool,
+        fetch_fn: FetchFn,
+    ) -> Result<(FetchReturn, Option<ETag>), StorageError>
+    where
+        FetchFn: FnOnce(Result<Arc<Vec<u8>>, StorageError>) -> FetchFut + Send + 'static,
+        FetchFut: Future<Output = Result<FetchReturn, StorageError>> + Send + 'static,
+        FetchReturn: Clone + Any + Sync + Send,
+    {
+        self.metrics.nac_outstanding_read_requests.record(
+            self.metrics
+                .outstanding_read_requests
+                .load(Ordering::Relaxed) as u64,
+            &self.metrics.hostname_attribute,
+        );
+        self.metrics
+            .outstanding_read_requests
+            .fetch_add(1, Ordering::Relaxed);
+
+>>>>>>> e3227a39a ([ENH] Move fetch to its own task for cancellation (#5158))
         if options.requires_strong_consistency {
             return self.strongly_consistent_get_with_e_tag(key, options).await;
         }
+
         // If there is a duplicate request and the original request finishes
         // before we look it up in the map below then we will end up with another
         // request to S3.
         let future_to_await;
         {
+<<<<<<< HEAD
+=======
+            let lock_held_duration = Stopwatch::new(
+                &self.metrics.nac_lock_wait_duration_us,
+                &self.metrics.hostname_attribute,
+                chroma_tracing::util::StopWatchUnit::Micros,
+            );
+>>>>>>> e3227a39a ([ENH] Move fetch to its own task for cancellation (#5158))
             let mut requests = self.outstanding_read_requests.lock().await;
             let maybe_inflight = requests.get(key).cloned();
             future_to_await = match maybe_inflight {
                 Some(fut) => {
                     // Update the priority if the new request has higher priority.
+<<<<<<< HEAD
                     fut.update_priority(options.priority).await;
                     fut.future
                 }
@@ -312,6 +453,108 @@ impl AdmissionControlledS3Storage {
                         },
                     );
                     get_storage_future
+=======
+                    inflight_req
+                        .maybe_update_priority(
+                            options.priority,
+                            self.metrics.nac_priority_increase_sent.clone(),
+                            &self.metrics.hostname_attribute,
+                        )
+                        .await;
+                    let (output_tx, output_rx) = tokio::sync::oneshot::channel();
+                    // Add the new sender to the existing request, then release the lock so the driving task
+                    // can make progress.
+                    inflight_req.senders.push(output_tx);
+                    drop(requests);
+                    drop(lock_held_duration);
+                    output_rx.await.map_err(|e| {
+                        tracing::error!("Unexpected channel closure: {}", e);
+                        StorageError::Generic {
+                            source: Arc::new(e),
+                        }
+                    })??
+                }
+                None => {
+                    let atomic_priority = Arc::new(AtomicUsize::new(options.priority.as_usize()));
+                    let (priority_tx, priority_rx) = tokio::sync::mpsc::channel(100);
+                    let (output_tx, output_rx) = tokio::sync::oneshot::channel();
+                    requests.insert(
+                        key.to_string(),
+                        InflightRequest {
+                            priority: atomic_priority.clone(),
+                            priority_upgrade_channel: Some(priority_tx),
+                            senders: vec![output_tx],
+                        },
+                    );
+                    // Release the lock before spawning the network request task
+                    drop(requests);
+                    drop(lock_held_duration);
+
+                    // Clones for the spawned task.
+                    let read_requests_waiting_for_token =
+                        self.metrics.read_requests_waiting_for_token.clone();
+                    let nac_read_requests_waiting_for_token =
+                        self.metrics.nac_read_requests_waiting_for_token.clone();
+                    let hostname_attr = self.metrics.hostname_attribute.clone();
+                    let storage_clone = self.storage.clone();
+                    let rate_limiter_clone = self.rate_limiter.clone();
+                    let outstanding_read_requests = self.outstanding_read_requests.clone();
+                    let key_clone = key.to_string();
+
+                    // NOTE(hammadb): If the upstream request gets cancelled, we still
+                    // finish the request once it has been spawned, if its cancelled
+                    // before it has been spawned, then the task will never run.
+                    tokio::spawn(async move {
+                        let res = if is_parallel {
+                            AdmissionControlledS3Storage::parallel_fetch(
+                                storage_clone,
+                                rate_limiter_clone,
+                                key_clone.clone(),
+                                atomic_priority,
+                                read_requests_waiting_for_token,
+                                nac_read_requests_waiting_for_token,
+                                hostname_attr,
+                            )
+                            .await
+                        } else {
+                            AdmissionControlledS3Storage::read_from_storage(
+                                storage_clone,
+                                rate_limiter_clone,
+                                key_clone.clone(),
+                                atomic_priority,
+                                Some(priority_rx),
+                                read_requests_waiting_for_token,
+                                nac_read_requests_waiting_for_token,
+                                hostname_attr,
+                            )
+                            .await
+                        };
+                        let fetched = AdmissionControlledS3Storage::execute_fetch(fetch_fn, res)
+                            .await
+                            .map(|(r, e_tag)| (Arc::new(r) as Arc<dyn Any + Send + Sync>, e_tag));
+
+                        // Clean up the requests map entry.
+                        // SAFETY(hammadb): We just created this entry above, and only this task remove it,
+                        // so it must exist.
+                        let mut requests = outstanding_read_requests.lock().await;
+                        let mut inflight = requests.remove(&key_clone).expect("Key must exist");
+                        drop(requests);
+                        for output_tx in inflight.senders.drain(..) {
+                            match output_tx.send(fetched.clone()) {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    tracing::error!("Unexpected channel closure, the calling task must have been dropped");
+                                }
+                            }
+                        }
+                    });
+                    output_rx.await.map_err(|e| {
+                        tracing::error!("Unexpected channel closure: {}", e);
+                        StorageError::Generic {
+                            source: Arc::new(e),
+                        }
+                    })??
+>>>>>>> e3227a39a ([ENH] Move fetch to its own task for cancellation (#5158))
                 }
             };
         }

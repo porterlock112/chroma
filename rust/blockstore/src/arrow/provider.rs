@@ -437,6 +437,7 @@ impl BlockManager {
         priority: StorageRequestPriority,
     ) -> Result<Option<Block>, GetError> {
         let block = self.block_cache.obtain(*id).await.ok().flatten();
+<<<<<<< HEAD
         match block {
             Some(block) => Ok(Some(block)),
             None => async {
@@ -482,6 +483,41 @@ impl BlockManager {
                                 Err(GetError::BlockLoadError(e))
                             }
                         }
+=======
+        if let Some(block) = block {
+            return Ok(Some(block));
+        }
+
+        // Closure cloning
+        let key = Self::format_key(prefix_path, id);
+        let id_clone = *id;
+        let block_cache_clone = self.block_cache.clone();
+        let key_clone = key.clone();
+        let num_get_requests_metric_clone = self.block_metrics.num_get_requests.clone();
+
+        let res = self.storage
+            .fetch(&key, GetOptions::new(priority), move |bytes| async move {
+                let bytes = match bytes {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        tracing::error!("Error loading block from storage: {:?}", e);
+                        return Err(StorageError::Message {
+                            message: "Error loading block".to_string(),
+                        });
+                    }
+                };
+                num_get_requests_metric_clone.record(1, &[]);
+                let deserialization_span = tracing::trace_span!(
+                    parent: Span::current(),
+                    "BlockManager deserialize block",
+                    id = id_clone.to_string()
+                );
+                let block = deserialization_span.in_scope(|| Block::from_bytes(&bytes, id_clone));
+                match block {
+                    Ok(block) => {
+                        block_cache_clone.insert(id_clone, block.clone()).await;
+                        Ok(block)
+>>>>>>> e3227a39a ([ENH] Move fetch to its own task for cancellation (#5158))
                     }
                     Err(e) => {
                         tracing::error!("Error converting bytes to Block {:?}", e);

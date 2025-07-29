@@ -231,6 +231,44 @@ impl Storage {
         }
     }
 
+<<<<<<< HEAD
+=======
+    pub async fn fetch<FetchReturn, FetchFn, FetchFut>(
+        &self,
+        key: &str,
+        options: GetOptions,
+        fetch_fn: FetchFn,
+    ) -> Result<(FetchReturn, Option<ETag>), StorageError>
+    where
+        FetchFn: FnOnce(Result<Arc<Vec<u8>>, StorageError>) -> FetchFut + Send + 'static,
+        FetchFut: Future<Output = Result<FetchReturn, StorageError>> + Send + 'static,
+        FetchReturn: Clone + Any + Sync + Send,
+    {
+        match self {
+            Storage::ObjectStore(object_store) => {
+                let res = object_store.get_with_e_tag(key).await?;
+                let fetch_result = fetch_fn(Ok(res.0)).await?;
+                Ok((fetch_result, res.1))
+            }
+            Storage::S3(s3) => {
+                let res = s3.get_with_e_tag(key).await?;
+                let fetch_result = fetch_fn(Ok(res.0)).await?;
+                Ok((fetch_result, res.1))
+            }
+            Storage::Local(local) => {
+                let res = local.get_with_e_tag(key).await?;
+                let fetch_result = fetch_fn(Ok(res.0)).await?;
+                Ok((fetch_result, res.1))
+            }
+            Storage::AdmissionControlledS3(admission_controlled_storage) => {
+                admission_controlled_storage
+                    .fetch(key, options, fetch_fn)
+                    .await
+            }
+        }
+    }
+
+>>>>>>> e3227a39a ([ENH] Move fetch to its own task for cancellation (#5158))
     pub async fn get_with_e_tag(
         &self,
         key: &str,
