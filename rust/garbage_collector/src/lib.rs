@@ -8,10 +8,14 @@ use chroma_tracing::{
     init_tracing,
 };
 use chroma_types::chroma_proto::garbage_collector_server::GarbageCollectorServer;
+use chroma_types::chroma_proto::{
+    KickoffGarbageCollectionRequest, KickoffGarbageCollectionResponse,
+};
 use config::GarbageCollectorConfig;
 use garbage_collector_component::GarbageCollector;
 use tokio::signal::unix::{signal, SignalKind};
 use tonic::transport::Server;
+use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
 
 mod config;
@@ -27,12 +31,18 @@ pub mod types;
 
 const CONFIG_PATH_ENV_VAR: &str = "CONFIG_PATH";
 
-// This is a placeholder service so that we can expose a health service
 struct GarbageCollectorService {}
 
+#[async_trait::async_trait]
 impl chroma_types::chroma_proto::garbage_collector_server::GarbageCollector
     for GarbageCollectorService
 {
+    async fn kickoff_garbage_collection(
+        &self,
+        req: Request<KickoffGarbageCollectionRequest>,
+    ) -> Result<Response<KickoffGarbageCollectionResponse>, Status> {
+        Err(Status::not_found("resource not found"))
+    }
 }
 
 pub async fn garbage_collector_service_entrypoint() -> Result<(), Box<dyn std::error::Error>> {
@@ -78,7 +88,11 @@ pub async fn garbage_collector_service_entrypoint() -> Result<(), Box<dyn std::e
         .parse()
         .expect("Invalid address format");
     let server_join_handle = tokio::spawn(async move {
-        let server = Server::builder().add_service(health_service);
+        let server = Server::builder().add_service(health_service).add_service(
+            chroma_types::chroma_proto::garbage_collector_server::GarbageCollectorServer::new(
+                GarbageCollectorService {},
+            ),
+        );
         server
             .serve_with_shutdown(addr, async {
                 match signal(SignalKind::terminate()) {
