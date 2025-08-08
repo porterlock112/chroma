@@ -3,7 +3,7 @@ syntax = "proto3";
 package chroma;
 
 message KickoffGarbageCollectionRequest {
-  string collection = 1;
+  string collection_id = 1;
 }
 
 message KickoffGarbageCollectionResponse {
