@@ -340,9 +340,8 @@ impl WorkerServer {
         if vector_segment_type == SegmentType::Spann {
             tracing::debug!("Running KNN on SPANN segment");
             // Create unified futures that run KNN then projection
-            let knn_with_projection_futures = Vec::from(KnnBatch::try_from(knn)?)
-                .into_iter()
-                .map(|knn| {
+            let knn_with_projection_futures =
+                Vec::from(KnnBatch::try_from(knn)?).into_iter().map(|knn| {
                     let spann_provider = self.spann_provider.clone();
                     let dispatcher = dispatcher.clone();
                     let collection_and_segments = collection_and_segments.clone();
@@ -350,7 +349,7 @@ impl WorkerServer {
                     let system = system.clone();
                     let blockfile_provider = self.blockfile_provider.clone();
                     let knn_projection = knn_projection.clone();
-                    
+
                     async move {
                         // Run KNN orchestrator
                         let knn_orchestrator = SpannKnnOrchestrator::new(
@@ -366,7 +365,7 @@ impl WorkerServer {
                             .run(system.clone())
                             .await
                             .map_err(|e| Status::new(e.code().into(), e.to_string()))?;
-                        
+
                         // Run projection orchestrator
                         let projection_orchestrator = ProjectionOrchestrator::new(
                             dispatcher,
@@ -383,7 +382,7 @@ impl WorkerServer {
                             .map_err(|e| Status::new(e.code().into(), e.to_string()))
                     }
                 });
-            
+
             match stream::iter(knn_with_projection_futures)
                 .buffered(32)
                 .try_collect::<Vec<_>>()
@@ -400,16 +399,15 @@ impl WorkerServer {
             }
         } else {
             // Create unified futures that run KNN then projection
-            let knn_with_projection_futures = Vec::from(KnnBatch::try_from(knn)?)
-                .into_iter()
-                .map(|knn| {
+            let knn_with_projection_futures =
+                Vec::from(KnnBatch::try_from(knn)?).into_iter().map(|knn| {
                     let blockfile_provider = self.blockfile_provider.clone();
                     let dispatcher = dispatcher.clone();
                     let collection_and_segments = collection_and_segments.clone();
                     let matching_records = matching_records.clone();
                     let system = system.clone();
                     let knn_projection = knn_projection.clone();
-                    
+
                     async move {
                         // Run KNN orchestrator
                         let knn_orchestrator = KnnOrchestrator::new(
@@ -425,7 +423,7 @@ impl WorkerServer {
                             .run(system.clone())
                             .await
                             .map_err(|e| Status::new(e.code().into(), e.to_string()))?;
-                        
+
                         // Run projection orchestrator
                         let projection_orchestrator = ProjectionOrchestrator::new(
                             dispatcher,
