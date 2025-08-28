@@ -16,7 +16,7 @@ use chroma_types::{
         self,
         query_executor_server::{QueryExecutor, QueryExecutorServer},
     },
-    operator::{GetResult, Knn, KnnBatch, KnnBatchResult, KnnProjection, Rank, Scan},
+    operator::{GetResult, Knn, KnnBatch, KnnBatchResult, KnnProjection, QueryVector, Scan},
     plan::SearchPayload,
     CollectionAndSegments, SegmentType,
 };
@@ -33,7 +33,7 @@ use crate::{
             knn::KnnOrchestrator,
             knn_filter::KnnFilterOrchestrator,
             projection::ProjectionOrchestrator,
-            score::{ScoreOrchestrator, ScoreOrchestratorOutput},
+            rank::{RankOrchestrator, RankOrchestratorOutput},
             spann_knn::SpannKnnOrchestrator,
             sparse_knn::SparseKnnOrchestrator,
             CountOrchestrator,
@@ -470,7 +470,7 @@ impl WorkerServer {
         &self,
         scan: chroma_proto::ScanOperator,
         payload: chroma_proto::SearchPayload,
-    ) -> Result<ScoreOrchestratorOutput, Status> {
+    ) -> Result<RankOrchestratorOutput, Status> {
         let collection_and_segments = Scan::try_from(scan)?.collection_and_segments;
         let search_payload = SearchPayload::try_from(payload)?;
         let fetch_log = self.fetch_log(&collection_and_segments, self.fetch_log_batch_size);
@@ -492,10 +492,10 @@ impl WorkerServer {
             }
         };
 
-        let ranks = search_payload.score.ranks();
-        let mut rank_futures = Vec::with_capacity(ranks.len());
+        let knn_queries = search_payload.rank.knn_queries();
+        let mut knn_futures = Vec::with_capacity(knn_queries.len());
 
-        for rank in ranks {
+        for knn_query in knn_queries {
             let matching_records_clone = matching_records.clone();
             let collection_and_segments_clone = collection_and_segments.clone();
             let system_clone = self.system.clone();
@@ -503,13 +503,9 @@ impl WorkerServer {
             let blockfile_provider = self.blockfile_provider.clone();
             let spann_provider = self.spann_provider.clone();
 
-            rank_futures.push(async move {
-                let result = match &rank {
-                    Rank::DenseKnn {
-                        embedding,
-                        key: _,
-                        limit,
-                    } => {
+            knn_futures.push(async move {
+                let result = match &knn_query.embedding {
+                    QueryVector::Dense(embedding) => {
                         // Check segment type to decide between HNSW and SPANN
                         let vector_segment_type =
                             collection_and_segments_clone.vector_segment.r#type;
@@ -522,7 +518,7 @@ impl WorkerServer {
                                 1000,
                                 collection_and_segments_clone,
                                 matching_records_clone,
-                                *limit as usize,
+                                knn_query.limit as usize,
                                 embedding.clone(),
                             );
 
@@ -534,7 +530,7 @@ impl WorkerServer {
                             // Use HNSW KNN orchestrator
                             let knn = Knn {
                                 embedding: embedding.clone(),
-                                fetch: *limit,
+                                fetch: knn_query.limit,
                             };
 
                             let knn_orchestrator = KnnOrchestrator::new(
@@ -552,11 +548,7 @@ impl WorkerServer {
                                 .map_err(|e| Status::new(e.code().into(), e.to_string()))?
                         }
                     }
-                    Rank::SparseKnn {
-                        embedding,
-                        key,
-                        limit,
-                    } => {
+                    QueryVector::Sparse(embedding) => {
                         // Use Sparse KNN orchestrator
                         let sparse_orchestrator = SparseKnnOrchestrator::new(
                             blockfile_provider,
@@ -565,8 +557,8 @@ impl WorkerServer {
                             collection_and_segments_clone,
                             matching_records_clone,
                             embedding.clone(),
-                            key.clone(),
-                            *limit,
+                            knn_query.key.clone(),
+                            knn_query.limit,
                         );
 
                         sparse_orchestrator
@@ -576,29 +568,29 @@ impl WorkerServer {
                     }
                 };
 
-                Ok::<_, Status>((rank, result))
+                Ok::<_, Status>((knn_query, result))
             });
         }
 
-        let ranks_map = stream::iter(rank_futures)
+        let knn_results_map = stream::iter(knn_futures)
             .buffered(32)
             .try_collect::<HashMap<_, _>>()
             .await?;
 
-        // Run ScoreOrchestrator to evaluate scores and select results
-        let score_orchestrator = ScoreOrchestrator::new(
+        // Run RankOrchestrator to evaluate ranks and select results
+        let rank_orchestrator = RankOrchestrator::new(
             self.blockfile_provider.clone(),
             self.clone_dispatcher()?,
             1000, // TODO: Make this configurable
-            ranks_map,
-            search_payload.score,
+            knn_results_map,
+            search_payload.rank,
             search_payload.limit,
             search_payload.select,
             collection_and_segments,
             matching_records.logs,
         );
 
-        score_orchestrator
+        rank_orchestrator
             .run(self.system.clone())
             .await
             .map_err(|err| Status::new(err.code().into(), err.to_string()))
